@@ -1,0 +1,694 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>SegmentChain Deep Dive</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: sticky section bar on top, one reading column (about 860px) with hands-on labs between explanations.
+   Palette: cool paper grey, deep ink, one teal accent. Five segment colours (S1 to S5) are reused in every picture. */
+:root{
+  --bg:#F3F6F8; --surface:#FFFFFF; --surface2:#E9EEF2; --ink:#0F1B26; --muted:#52616F; --line:#D3DCE4;
+  --accent:#0B6E6E; --accent-ink:#FFFFFF; --warn:#A8480A; --bad:#B42318; --good:#16703A;
+  --code-bg:#EAF0F4; --code-ink:#16283A;
+  --s1:#0B6E6E; --s2:#B4540A; --s3:#6D3FC4; --s4:#B4235A; --s5:#2559C9;
+  --display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
+  --body:'Public Sans','Segoe UI',system-ui,-apple-system,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0B131B; --surface:#121D28; --surface2:#1A2836; --ink:#E7EEF4; --muted:#93A4B4; --line:#263646;
+  --accent:#4FD1C5; --accent-ink:#04201F; --warn:#F0A35E; --bad:#F47C70; --good:#5CD08B;
+  --code-bg:#0D1822; --code-ink:#CFE0EE;
+  --s1:#4FD1C5; --s2:#F0A35E; --s3:#B79CFF; --s4:#FF8FB5; --s5:#7DA8FF; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0B131B; --surface:#121D28; --surface2:#1A2836; --ink:#E7EEF4; --muted:#93A4B4; --line:#263646;
+  --accent:#4FD1C5; --accent-ink:#04201F; --warn:#F0A35E; --bad:#F47C70; --good:#5CD08B;
+  --code-bg:#0D1822; --code-ink:#CFE0EE;
+  --s1:#4FD1C5; --s2:#F0A35E; --s3:#B79CFF; --s4:#FF8FB5; --s5:#7DA8FF; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.6;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:30;background:var(--surface)}
+.wrap{max-width:860px;margin:0 auto}
+h1,h2,h3{font-family:var(--display);line-height:1.15;text-wrap:balance;margin:0}
+h1{font-size:clamp(2.1rem,6vw,3.4rem);font-weight:700;letter-spacing:-.02em}
+h2{font-size:clamp(1.6rem,4vw,2.1rem);font-weight:700;letter-spacing:-.01em}
+h3{font-size:1.2rem;font-weight:600}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+code,.mono{font-family:var(--mono);font-size:.88em}
+code{background:var(--code-bg);padding:.1em .35em;border-radius:4px;color:var(--code-ink);overflow-wrap:anywhere}
+.eyebrow{font-size:.74rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+
+/* top bar */
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--surface);border-bottom:1px solid var(--line);
+  margin-left:calc(-1*max(16px,env(safe-area-inset-left,0px)));margin-right:calc(-1*max(16px,env(safe-area-inset-right,0px)));
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.bar nav{display:flex;gap:.25rem;overflow-x:auto;max-width:860px;margin:0 auto;padding:.5rem 0;scrollbar-width:thin}
+.bar a{white-space:nowrap;text-decoration:none;color:var(--muted);font-size:.86rem;font-weight:500;padding:.35rem .7rem;border-radius:999px}
+.bar a:hover,.bar a:focus-visible{background:var(--surface2);color:var(--ink);outline:none}
+
+section{padding-block:3.2rem 1rem;scroll-margin-top:3.5rem}
+.lede{font-size:1.12rem;color:var(--muted);max-width:62ch}
+.hero{padding-block:3.5rem 1rem}
+.hero .lede{margin-top:1rem}
+.story{display:grid;gap:.8rem;margin-top:1.6rem}
+.story div{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:.9rem 1.1rem;display:grid;grid-template-columns:auto 1fr;gap:.9rem;align-items:start}
+.story b{font-family:var(--display);font-size:1.6rem;line-height:1;color:var(--accent);min-width:1.4rem}
+.story span{min-width:0}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:1.2rem;margin:1.4rem 0}
+.panel>h3{margin-bottom:.4rem}
+.lab-tag{display:inline-block;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:var(--accent-ink);background:var(--accent);padding:.15rem .55rem;border-radius:4px;margin-bottom:.6rem}
+.note{border-left:3px solid var(--accent);background:var(--surface2);padding:.7rem 1rem;border-radius:0 8px 8px 0;margin:1rem 0;font-size:.95rem}
+.note.warn{border-color:var(--warn)}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem}
+.row>*{min-width:0}
+label{font-size:.85rem;font-weight:600;display:block;margin-bottom:.25rem}
+input[type=text],input[type=number]{width:100%;font:inherit;font-family:var(--mono);font-size:.92rem;padding:.5rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+input:focus-visible,button:focus-visible,summary:focus-visible,input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+button{font:inherit;font-size:.86rem;font-weight:600;padding:.45rem .8rem;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button.primary:hover{color:var(--accent-ink);filter:brightness(1.08)}
+button[aria-pressed=true]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.hash{font-family:var(--mono);font-size:.78rem;word-break:break-all;line-height:1.5;background:var(--code-bg);color:var(--code-ink);padding:.55rem .65rem;border-radius:6px;margin-top:.4rem}
+.hash mark{background:color-mix(in srgb,var(--warn) 30%,transparent);color:inherit;border-radius:2px}
+.stat{font-family:var(--display);font-size:1.7rem;font-weight:700;line-height:1.1}
+.stat small{font-family:var(--body);font-size:.78rem;font-weight:500;color:var(--muted);display:block;margin-top:.15rem}
+.pill{display:inline-block;font-size:.76rem;font-weight:600;padding:.1rem .55rem;border-radius:999px;border:1px solid var(--line)}
+.pill.ok{color:var(--good);border-color:var(--good)}
+.pill.bad{color:var(--bad);border-color:var(--bad)}
+
+/* chain lab */
+.chain{display:flex;gap:.7rem;overflow-x:auto;padding:.3rem .1rem .8rem;align-items:stretch}
+.blk{flex:0 0 190px;border:1.5px solid var(--line);border-radius:10px;background:var(--bg);padding:.7rem;display:flex;flex-direction:column;gap:.35rem;min-width:0}
+.blk.bad{border-color:var(--bad)}
+.blk.good{border-color:var(--good)}
+.blk h4{margin:0;font-family:var(--display);font-size:1rem}
+.blk .f{font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.blk .v{font-family:var(--mono);font-size:.74rem;overflow-wrap:anywhere}
+.blk .badges{display:flex;flex-wrap:wrap;gap:.25rem}
+.verdict{padding:.75rem 1rem;border-radius:8px;font-weight:600;margin-top:.4rem;border:1px solid var(--line)}
+.verdict.ok{border-color:var(--good);color:var(--good)}
+.verdict.bad{border-color:var(--bad);color:var(--bad)}
+
+/* bars */
+.stackbar{display:flex;height:34px;border-radius:6px;overflow:hidden;background:var(--surface2);margin:.25rem 0 .2rem}
+.stackbar i{display:block;height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:.9rem;font-size:.8rem;color:var(--muted);margin:.4rem 0 1rem}
+.legend span::before{content:"";display:inline-block;width:.8rem;height:.8rem;border-radius:3px;background:var(--c);margin-right:.35rem;vertical-align:-.1em}
+svg{max-width:100%;height:auto;display:block}
+svg text{font-family:var(--body);font-size:11px;fill:var(--muted)}
+.chartbox{overflow-x:auto}
+
+/* node grid */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:.45rem;margin:.8rem 0}
+.node{border:1.5px solid var(--line);border-radius:8px;padding:.35rem .45rem;background:var(--bg);min-height:62px;position:relative;font-size:.72rem}
+.node b{font-family:var(--mono);font-size:.74rem}
+.node .tags{display:flex;flex-wrap:wrap;gap:.2rem;margin-top:.2rem}
+.node .tags em{font-style:normal;font-weight:600;font-size:.68rem;padding:0 .3rem;border-radius:3px;color:#fff;background:var(--c)}
+:root[data-theme="dark"] .node .tags em{color:#061018}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .node .tags em{color:#061018}}
+.node.empty{color:var(--muted);border-style:dashed}
+.node.down{opacity:.45;border-color:var(--bad);text-decoration:line-through}
+.node.down::after{content:"off";position:absolute;right:.35rem;top:.25rem;font-size:.65rem;font-weight:700;color:var(--bad);text-decoration:none}
+.segs{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.5rem}
+.segs div{border:1px solid var(--line);border-radius:8px;padding:.5rem .7rem;font-size:.84rem}
+.segs b{display:block;font-family:var(--display);font-size:1rem}
+.segs .lost{border-color:var(--bad);color:var(--bad)}
+.segs .one{border-color:var(--warn)}
+
+/* tables and code */
+.tw{overflow-x:auto;margin:.6rem 0 1rem}
+table{border-collapse:collapse;width:100%;font-size:.88rem;min-width:520px}
+th,td{text-align:left;padding:.5rem .65rem;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.72rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+td:first-child{font-family:var(--mono);font-size:.82rem;white-space:nowrap}
+pre{background:var(--code-bg);color:var(--code-ink);padding:.8rem 1rem;border-radius:8px;overflow-x:auto;font-family:var(--mono);font-size:.78rem;line-height:1.55;margin:.6rem 0 1rem}
+
+/* pipeline */
+.pipe{display:grid;gap:.5rem;margin:1rem 0;counter-reset:p}
+.pipe div{display:grid;grid-template-columns:2.2rem 1fr;gap:.8rem;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:.7rem .9rem;align-items:start}
+.pipe div::before{counter-increment:p;content:counter(p);font-family:var(--display);font-weight:700;width:2rem;height:2rem;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center}
+.pipe span{min-width:0}
+
+/* files */
+details.file{background:var(--surface);border:1px solid var(--line);border-radius:12px;margin:.8rem 0}
+details.file>summary{cursor:pointer;list-style:none;padding:.9rem 1.1rem;display:grid;gap:.1rem}
+details.file>summary::-webkit-details-marker{display:none}
+details.file>summary .fn{font-family:var(--mono);font-weight:500;font-size:1rem;color:var(--accent)}
+details.file>summary .fl{color:var(--muted);font-size:.92rem}
+details.file>summary::after{content:"Show details";font-size:.74rem;font-weight:600;color:var(--muted);margin-top:.2rem}
+details.file[open]>summary::after{content:"Hide details"}
+.fbody{padding:0 1.1rem 1.1rem;border-top:1px solid var(--line)}
+.fbody h4{font-family:var(--display);margin:1.1rem 0 .3rem;font-size:1rem}
+.fbody ol,.fbody ul{margin:.2rem 0 .6rem;padding-left:1.2rem}
+.fbody li{margin:.25rem 0}
+.analogy{background:var(--surface2);border-radius:8px;padding:.6rem .85rem;margin-top:.9rem;font-size:.95rem}
+
+dl.gl{display:grid;grid-template-columns:minmax(0,max-content) minmax(0,1fr);gap:.5rem 1.2rem;font-size:.94rem}
+dl.gl dt{font-weight:600}
+dl.gl dd{margin:0;color:var(--muted)}
+@media (max-width:560px){dl.gl{grid-template-columns:1fr}dl.gl dd{margin-bottom:.5rem}}
+footer{padding-block:3rem 4rem;color:var(--muted);font-size:.88rem}
+@media (prefers-reduced-motion:no-preference){.bar a{transition:background .15s}}
+</style>
+
+<div class="bar"><nav aria-label="Sections">
+  <a href="#start">Start here</a><a href="#basics">Blockchain basics</a><a href="#problem">The problem</a>
+  <a href="#nodes">The network</a><a href="#pipeline">How it runs</a><a href="#files">File by file</a>
+  <a href="#risks">Failures and odds</a><a href="#real">Real vs simulated</a><a href="#glossary">Glossary</a>
+</nav></div>
+
+<main class="wrap">
+
+<section id="start" class="hero">
+  <div class="eyebrow">Your project, explained from zero</div>
+  <h1>SegmentChain, step by step</h1>
+  <p class="lede">You do not need to know anything about blockchain to start. Read the five ideas below, play with the small labs, then open any file of your project to see what every field and function does. All numbers and examples come from running your own code.</p>
+  <div class="story">
+    <div><b>1</b><span><strong>A blockchain is a list of records.</strong> Each record (a block) holds some transfers and carries a fingerprint of the record before it.</span></div>
+    <div><b>2</b><span><strong>The fingerprints make cheating visible.</strong> Change an old record and every fingerprint after it stops matching.</span></div>
+    <div><b>3</b><span><strong>Many computers (nodes) keep copies.</strong> In a normal blockchain each node stores everything, so the storage each one needs keeps growing.</span></div>
+    <div><b>4</b><span><strong>Your topic: store only pieces.</strong> Cut the history into segments. Each node keeps a few segments plus all the fingerprints, so it can still check what it fetches.</span></div>
+    <div><b>5</b><span><strong>Your program is a simulator.</strong> It pretends to be such a network so you can measure the storage saved and what happens when nodes disappear.</span></div>
+  </div>
+</section>
+
+<section id="basics">
+  <div class="eyebrow">Part 1</div>
+  <h2>Blockchain basics, with things to click</h2>
+  <p class="lede">Three ideas are enough: a hash, a block, a chain. Your file <code>blockchain.py</code> implements all three.</p>
+
+  <h3 style="margin-top:2rem">1.1 A hash is a fingerprint</h3>
+  <p>A hash function (your code uses SHA-256) turns any text into a fixed 64-character code. The same text always gives the same code. Change one character and the code changes completely. Nobody can work backwards from the code to the text.</p>
+  <div class="panel">
+    <span class="lab-tag">Hash lab</span>
+    <div class="row">
+      <div><label for="hA">Text A</label><input id="hA" type="text" value="Account_1 pays Account_3 82.31"></div>
+      <div><label for="hB">Text B (try changing one digit)</label><input id="hB" type="text" value="Account_1 pays Account_3 82.32"></div>
+    </div>
+    <div class="hash" id="hOutA" aria-live="polite"></div>
+    <div class="hash" id="hOutB" aria-live="polite"></div>
+    <p style="margin:.7rem 0 0" id="hDiff"></p>
+  </div>
+
+  <h3 style="margin-top:2rem">1.2 A block is one page of the ledger</h3>
+  <p>A block bundles some transfers and links to the page before it. This is block 1 from a small run of your code (10 blocks, 2 transfers each, seed 7). The labels on the right say what each line is.</p>
+<pre>index          1
+timestamp      1094130041.9396825          (fake time, see blockchain.py)
+transactions   Account_10 → Account_1   91.06   tx_1_0
+               Account_4  → Account_1    9.51   tx_1_1
+previous_hash  f015c43d4e3230b87fcc9df71c7074cc…   = block 0's block_hash
+data_hash      4ee15c4e3801d4445a91e87c05b61c5c…   = fingerprint of the two transfers
+block_hash     52857a0f1a2df4f21f637a11731f3480…   = fingerprint of index + timestamp
+                                                     + data_hash + previous_hash</pre>
+  <p>Notice that <code>previous_hash</code> of block 1 is exactly the <code>block_hash</code> of block 0. That copy is the link in the chain.</p>
+
+  <h3 style="margin-top:2rem">1.3 The chain: why tampering shows up</h3>
+  <p>Each block's <code>block_hash</code> includes the previous block's hash. So if block 2 is edited, its hash changes, and block 3 still remembers the old one. The project's <code>verify_chain()</code> walks left to right and reports the first mismatch. Try it below. The lab uses the same rules as your code, with the transaction list reduced to one amount.</p>
+  <div class="panel">
+    <span class="lab-tag">Chain lab</span>
+    <p style="margin-bottom:.3rem">Edit an amount, then use the buttons under a block. Stored fingerprints never change on their own, just like a saved ledger.</p>
+    <div class="chain" id="chain"></div>
+    <div class="verdict" id="verdict" role="status"></div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem">
+      <button id="rewrite" class="primary">Rewrite every hash from the first edited block</button>
+      <button id="reset">Reset</button>
+    </div>
+    <div class="note warn" style="margin-top:1rem">Try this order. (1) Change block 2's amount: block 2 fails. (2) Press "Recompute my hashes" on block 2: block 2 passes, but block 3 now fails, because it remembers the old hash. (3) Press the big button: everything passes again. The chain was rewritten and nothing noticed. Real blockchains prevent step 3 with mining and agreement between thousands of nodes. Your project has neither, and says so in its limitations.</div>
+  </div>
+</section>
+
+<section id="problem">
+  <div class="eyebrow">Part 2</div>
+  <h2>The problem, and your topic's idea</h2>
+  <p class="lede">If every node must keep every block, the cost of joining the network only goes up. The segment idea lets a node keep far less and still check what it needs.</p>
+  <div class="row">
+    <div class="panel" style="margin:0"><h3>Normal blockchain</h3><p style="margin:.4rem 0 0;color:var(--muted)">Every node stores all block data, all headers and the current state. Safe, but each node holds the whole history.</p></div>
+    <div class="panel" style="margin:0"><h3>Segment blockchain</h3><p style="margin:.4rem 0 0;color:var(--muted)">History is cut into segments. A node stores the block data of only its segments, plus every header and the state. Each segment is copied onto <em>m</em> nodes.</p></div>
+  </div>
+  <div class="note"><strong>Three words used everywhere.</strong> <em>Header</em>: the small summary of a block (here 160 bytes in the model). <em>State</em>: the latest balances of all accounts (4096 bytes in the model). <em>Block data</em>: the bulky transaction list of a block (1000 bytes in the model). Headers and state are small, so keeping them everywhere is cheap, and they let any node verify a segment it downloads.</div>
+
+  <h3 id="storage" style="margin-top:2rem">2.1 Storage lab</h3>
+  <p>Move the sliders. The model is the one in <code>storage_metrics.py</code>. Each block is stored on <em>m</em> nodes in total, so the average block data per node is <code>m × blocks × 1000 / nodes</code>. Headers and state are always full.</p>
+  <div class="panel">
+    <span class="lab-tag">Storage lab</span>
+    <div class="row">
+      <div><label for="sB">Blocks: <output id="oB">100</output></label><input id="sB" type="range" min="10" max="1000" step="10" value="100"></div>
+      <div><label for="sS">Segments: <output id="oS">5</output></label><input id="sS" type="range" min="2" max="50" value="5"></div>
+      <div><label for="sN">Nodes: <output id="oN">30</output></label><input id="sN" type="range" min="3" max="100" value="30"></div>
+      <div><label for="sM">Replicas per segment (m): <output id="oM">3</output></label><input id="sM" type="range" min="1" max="10" value="3"></div>
+    </div>
+    <div class="row" style="margin-top:1rem">
+      <div class="stat" id="stFull">-<small>bytes per full node</small></div>
+      <div class="stat" id="stAvg">-<small>bytes per segmented node (average)</small></div>
+      <div class="stat" id="stRed" style="color:var(--accent)">-<small>average saving</small></div>
+    </div>
+    <div style="margin-top:1rem">
+      <div class="eyebrow">Full node</div><div class="stackbar" id="barFull"></div>
+      <div class="eyebrow">Segmented node (average)</div><div class="stackbar" id="barSeg"></div>
+      <div class="legend"><span style="--c:var(--s1)">Block data</span><span style="--c:var(--s3)">Headers</span><span style="--c:var(--s2)">Latest state</span></div>
+    </div>
+    <div class="eyebrow">Saving as the replica count grows (other sliders fixed)</div>
+    <div class="chartbox"><svg id="curve" viewBox="0 0 560 230" role="img" aria-label="Storage saving versus replicas per segment"></svg></div>
+    <p id="stNote" style="color:var(--muted);font-size:.9rem;margin:.6rem 0 0"></p>
+  </div>
+  <p>The trade-off is the heart of the topic. More replicas make a segment harder to lose but shrink the saving. With your defaults (100 blocks, 5 segments, 30 nodes, 3 replicas) a full node needs 120,096 bytes and the average segmented node 30,096 bytes: 74.9% less.</p>
+</section>
+
+<section id="nodes">
+  <div class="eyebrow">Part 3</div>
+  <h2>The simulated network, drawn from a real run</h2>
+  <p class="lede">This is the exact assignment your code produced for the defaults with seed 7. Each tile is a node. Coloured tags show which segments it stores.</p>
+  <div class="panel">
+    <span class="lab-tag">Network map</span>
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap" role="group" aria-label="Failure scenario">
+      <button data-mode="0" aria-pressed="true">All nodes online</button>
+      <button data-mode="30" aria-pressed="false">30% of nodes fail (9)</button>
+      <button data-mode="60" aria-pressed="false">60% of nodes fail (18)</button>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="segs" id="segs"></div>
+    <p id="gridNote" style="margin:.8rem 0 0;color:var(--muted);font-size:.92rem"></p>
+  </div>
+  <div class="note">Things to notice. 16 of the 30 nodes store no segment at all (they only keep headers and state), 13 store one, and node N2 stores two (S2 and S4). That is because <code>random.sample</code> picks replica nodes with no balancing. It is also why the storage lab shows an average and the real run has a minimum of 20,096 bytes and a maximum of 60,096.</div>
+</section>
+
+<section id="pipeline">
+  <div class="eyebrow">Part 4</div>
+  <h2>What happens when you press Generate Simulation</h2>
+  <p>The button calls <code>run_simulation()</code> in <code>app.py</code>. These six things happen, in this order. Every later page of the app only reads what was built here.</p>
+  <div class="pipe">
+    <div><span><strong>Read the sidebar.</strong> Blocks, transactions per block, seed, segments, nodes, replicas, and the three byte sizes.</span></div>
+    <div><span><strong>Build the chain</strong> with <code>Blockchain.generate_chain(blocks, tx_per_block, seed)</code>. Output: a list of 100 linked blocks.</span></div>
+    <div><span><strong>Cut it into segments</strong> with <code>SegmentationEngine.partition_segments</code>. 100 blocks and 5 segments gives S1 = blocks 0 to 19, S2 = 20 to 39, up to S5 = 80 to 99.</span></div>
+    <div><span><strong>Place replicas</strong> with <code>AssignmentEngine.assign_segment_replicas</code>. Each segment lands on 3 different random nodes out of 30.</span></div>
+    <div><span><strong>Prepare the tools.</strong> The availability simulator and the integrity checker are created, and the checker saves a copy of the untouched chain.</span></div>
+    <div><span><strong>Compute storage</strong> with <code>StorageMetrics</code>. Pages then show charts, run failures, check the probability formula or export files.</span></div>
+  </div>
+  <div class="note"><strong>Same inputs, same result.</strong> The seed is passed to Python's random generator before the chain is built and before replicas are placed, so seed 7 always gives the numbers in this guide. Change the seed and the transfers, timestamps and node choices all change.</div>
+
+  <h3 style="margin-top:2rem">A worked example with the real numbers</h3>
+  <div class="tw"><table>
+    <tr><th>Segment</th><th>Blocks</th><th>Stored on nodes</th></tr>
+    <tr><td>S1</td><td>0 to 19 (20 blocks)</td><td>N11, N5, N13</td></tr>
+    <tr><td>S2</td><td>20 to 39 (20 blocks)</td><td>N21, N2, N3</td></tr>
+    <tr><td>S3</td><td>40 to 59 (20 blocks)</td><td>N27, N18, N4</td></tr>
+    <tr><td>S4</td><td>60 to 79 (20 blocks)</td><td>N12, N19, N2</td></tr>
+    <tr><td>S5</td><td>80 to 99 (20 blocks)</td><td>N30, N17, N7</td></tr>
+  </table></div>
+<pre>Full node           100 blocks × 1000 B data   = 100,000
+                    100 blocks ×  160 B header =  16,000
+                    latest state               =   4,096
+                                         total = 120,096 B
+
+Node N5 (holds S1)  20 blocks × 1000 B data    =  20,000
+                    all 100 headers            =  16,000
+                    latest state               =   4,096
+                                         total =  40,096 B
+
+Node N2 (S2 and S4) 40 blocks × 1000 B data    =  40,000  → 60,096 B   (the maximum)
+Node N1 (no segment)                           =   0      → 20,096 B   (the minimum)
+
+Average over 30 nodes: 3 replicas × 5 segments × 20 blocks × 1000 B = 300,000 B of block
+data spread over 30 nodes = 10,000 B each, plus 16,000 + 4,096 = 30,096 B.</pre>
+</section>
+
+<section id="files">
+  <div class="eyebrow">Part 5</div>
+  <h2>File by file</h2>
+  <p class="lede">Every file does one job. For each one you get what it is for, an everyday comparison, what each field means, how it works step by step, and real output from your code. The files are listed in the order the data travels through them.</p>
+  <div id="fileList"></div>
+</section>
+
+<section id="risks">
+  <div class="eyebrow">Part 6</div>
+  <h2>Failures and odds</h2>
+  <p class="lede">Fewer copies of each segment means a risk that every copy sits on a node that is down. Two files measure that risk in two different ways.</p>
+
+  <h3 style="margin-top:2rem">Simulated failures (<code>availability.py</code>)</h3>
+  <p>Use the network map in Part 3. At 30% failures (9 nodes), segments S1 and S2 lose all three holders and are gone, so only 3 of 5 segments (60%) remain. S3 and S4 survive on a single node each, which the code calls critical. At 60% failures only S5 survives (20%). One run is a few coin flips, so the results jump in steps of 20 points. Over many random seeds the average at 30% failures is about 98.5% availability, a number I computed by running your logic 200 times.</p>
+
+  <h3 style="margin-top:2rem">The paper's formula (<code>probability.py</code>)</h3>
+  <p>The formula <strong>P = (A / n)<sup>m</sup></strong> estimates the chance that a given segment has all its copies on attacker-controlled nodes. Here <em>n</em> is the number of nodes, <em>A</em> how many an attacker controls, and <em>m</em> the copies. Each copy lands on a bad node with chance A/n, and all <em>m</em> copies must do so, so the chances multiply.</p>
+  <div class="panel">
+    <span class="lab-tag">Probability lab</span>
+    <div class="row">
+      <div><label for="pN">Total nodes n: <output id="oPN">30</output></label><input id="pN" type="range" min="5" max="200" value="30"></div>
+      <div><label for="pA">Attacker nodes A: <output id="oPA">3</output></label><input id="pA" type="range" min="1" max="60" value="3"></div>
+      <div><label for="pM">Replicas m: <output id="oPM">3</output></label><input id="pM" type="range" min="1" max="10" value="3"></div>
+    </div>
+    <div class="row" style="margin-top:1rem">
+      <div class="stat" id="pRes">-<small>P by the paper's formula</small></div>
+      <div class="stat" id="pExact">-<small>exact chance (no node picked twice)</small></div>
+    </div>
+    <div class="chartbox"><svg id="pchart" viewBox="0 0 560 240" role="img" aria-label="Segment loss probability versus replicas, log scale"></svg></div>
+    <p id="pNote" style="color:var(--muted);font-size:.9rem;margin:.4rem 0 0"></p>
+  </div>
+  <div class="note">The "exact" figure is my own addition for learning. Because a segment's copies are on <em>different</em> nodes, the precise chance is (A/n) × ((A−1)/(n−1)) × … for m terms. For n = 30, A = 3, m = 3 that is 1 in 4,060 against the formula's 1 in 1,000, so the formula is a slightly cautious estimate. Your project uses the paper's formula, and it models a coordinated attacker, which is a different question from the random failures above.</div>
+</section>
+
+<section id="real">
+  <div class="eyebrow">Part 7</div>
+  <h2>What is real and what is simulated</h2>
+  <p>This matters when you explain the project. It is honest and still a good project, because it isolates one idea: storage.</p>
+  <div class="tw"><table>
+    <tr><th>Topic</th><th>A real blockchain</th><th>SegmentChain</th></tr>
+    <tr><td>Hashing</td><td>SHA-256 or similar, same idea</td><td>Real SHA-256 from <code>hashlib</code></td></tr>
+    <tr><td>Block link</td><td>Hash of previous header</td><td>Same: <code>previous_hash</code></td></tr>
+    <tr><td>Transactions</td><td>Signed by the owner, checked against balances</td><td>Random transfers, no signatures, balances may go negative</td></tr>
+    <tr><td>Transaction fingerprint</td><td>Usually a Merkle tree</td><td>One SHA-256 over the whole list</td></tr>
+    <tr><td>Agreeing on new blocks</td><td>Mining or staking, thousands of nodes</td><td>None. Blocks are generated in a loop</td></tr>
+    <tr><td>Nodes</td><td>Separate computers talking over a network</td><td>Python objects in one process</td></tr>
+    <tr><td>Storage sizes</td><td>Real bytes on disk</td><td>Assumed constants: 160, 4096 and 1000 bytes</td></tr>
+    <tr><td>Fetching a missing segment</td><td>Download from peers</td><td>Not simulated. Only "is any copy online?" is checked</td></tr>
+  </table></div>
+</section>
+
+<section id="glossary">
+  <div class="eyebrow">Reference</div>
+  <h2>Glossary</h2>
+  <dl class="gl">
+    <dt>Blockchain</dt><dd>A list of blocks where each block contains the fingerprint of the one before.</dd>
+    <dt>Block</dt><dd>One record: some transfers, a time, and links and fingerprints.</dd>
+    <dt>Genesis block</dt><dd>The first block (index 0). It has no predecessor, so its previous_hash is 64 zeros.</dd>
+    <dt>Hash / SHA-256</dt><dd>A one-way fingerprint function. Same input, same 64 hex characters.</dd>
+    <dt>Header</dt><dd>The small summary of a block that is hashed to make its identity.</dd>
+    <dt>State</dt><dd>The latest balance of every account after all transfers so far.</dd>
+    <dt>Node</dt><dd>One computer that stores data and takes part in the network. Here, a simulated one named N1 to N30.</dd>
+    <dt>Segment</dt><dd>A run of consecutive blocks, such as blocks 20 to 39.</dd>
+    <dt>Height</dt><dd>The index (position) of a block. A segment spans start_height to end_height.</dd>
+    <dt>Replica</dt><dd>One stored copy of a segment on one node. m replicas means m copies.</dd>
+    <dt>Checkpoint</dt><dd>A saved copy of all balances at a chosen block, so you need not replay history from the start.</dd>
+    <dt>Seed</dt><dd>A number that fixes Python's random choices so a run can be repeated exactly.</dd>
+    <dt>Adversary</dt><dd>An attacker assumed to control A nodes, used in the probability formula.</dd>
+    <dt>Streamlit</dt><dd>The Python library that turns app.py into the web dashboard.</dd>
+  </dl>
+</section>
+
+<footer>Source idea: Yibin Xu and Yangyu Huang, "Segment blockchain: A size reduced storage mechanism for blockchain", IEEE Access, 2020. Figures in this guide come from running the project's own code with its default settings and seed 7, except where marked as computed or added for explanation.</footer>
+</main>
+
+<script>
+/* ---------- tiny synchronous SHA-256 (matches hashlib's output) ---------- */
+const sha256=(function(){
+  const K=[],H0=[];
+  (function(){let n=2,c=0;while(c<64){let p=true;for(let d=2;d*d<=n;d++)if(n%d===0){p=false;break}
+    if(p){if(c<8)H0.push(Math.floor((Math.sqrt(n)%1)*4294967296));K.push(Math.floor((Math.cbrt(n)%1)*4294967296));c++}n++}})();
+  const rr=(x,n)=>(x>>>n)|(x<<(32-n));
+  return function(str){
+    const m=new TextEncoder().encode(str),l=m.length,nb=((l+9+63)>>6)<<6,b=new Uint8Array(nb);
+    b.set(m);b[l]=0x80;const dv=new DataView(b.buffer);dv.setUint32(nb-4,(l*8)>>>0);dv.setUint32(nb-8,Math.floor(l*8/4294967296));
+    const h=H0.slice(),w=new Array(64);
+    for(let o=0;o<nb;o+=64){
+      for(let i=0;i<16;i++)w[i]=dv.getUint32(o+i*4);
+      for(let i=16;i<64;i++){const s0=rr(w[i-15],7)^rr(w[i-15],18)^(w[i-15]>>>3),s1=rr(w[i-2],17)^rr(w[i-2],19)^(w[i-2]>>>10);w[i]=(w[i-16]+s0+w[i-7]+s1)|0}
+      let [a,b2,c,d,e,f,g,hh]=h;
+      for(let i=0;i<64;i++){
+        const S1=rr(e,6)^rr(e,11)^rr(e,25),ch=(e&f)^(~e&g),t1=(hh+S1+ch+K[i]+w[i])|0,
+              S0=rr(a,2)^rr(a,13)^rr(a,22),mj=(a&b2)^(a&c)^(b2&c),t2=(S0+mj)|0;
+        hh=g;g=f;f=e;e=(d+t1)|0;d=c;c=b2;b2=a;a=(t1+t2)|0}
+      h[0]=(h[0]+a)|0;h[1]=(h[1]+b2)|0;h[2]=(h[2]+c)|0;h[3]=(h[3]+d)|0;h[4]=(h[4]+e)|0;h[5]=(h[5]+f)|0;h[6]=(h[6]+g)|0;h[7]=(h[7]+hh)|0}
+    return h.map(x=>(x>>>0).toString(16).padStart(8,'0')).join('');
+  };
+})();
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=n=>Math.round(n).toLocaleString('en-US');
+
+/* ---------- 1.1 hash lab ---------- */
+function hashLab(){
+  const a=$('hA').value,b=$('hB').value,ha=sha256(a),hb=sha256(b);
+  let diff=0,A='',B='';
+  for(let i=0;i<64;i++){const same=ha[i]===hb[i];if(!same)diff++;A+=same?ha[i]:'<mark>'+ha[i]+'</mark>';B+=same?hb[i]:'<mark>'+hb[i]+'</mark>'}
+  $('hOutA').innerHTML='A: '+A;$('hOutB').innerHTML='B: '+B;
+  $('hDiff').textContent=a===b?'The texts are identical, so the hashes are identical.':
+    diff+' of 64 characters differ. Expect about 60 even for a one-character change. That is why a tiny edit cannot hide.';
+}
+$('hA').addEventListener('input',hashLab);$('hB').addEventListener('input',hashLab);hashLab();
+
+/* ---------- 1.3 chain lab (same rules as blockchain.py, one amount per block) ---------- */
+const ZERO='0'.repeat(64),START=[40.09,82.31,91.06,9.51,55.55];
+let blocks=[];
+const dataHash=a=>sha256('amount='+a);
+const blockHash=(i,d,p)=>sha256(''+i+d+p);
+function resetChain(){
+  blocks=[];let prev=ZERO;
+  START.forEach((amt,i)=>{const d=dataHash(amt),h=blockHash(i,d,prev);blocks.push({amount:String(amt),data:d,prev:prev,hash:h});prev=h});
+  drawChain();
+}
+function check(i){
+  const b=blocks[i];
+  return{data:dataHash(b.amount)===b.data,hash:blockHash(i,b.data,b.prev)===b.hash,link:i===0?b.prev===ZERO:b.prev===blocks[i-1].hash};
+}
+function verdictOf(){
+  for(let i=0;i<blocks.length;i++){
+    const c=check(i);
+    if(c.data&&c.hash&&c.link)continue;
+    if(i===0&&c.data&&c.hash&&!c.link)return'Genesis block has invalid previous hash';
+    return !c.data?'Transaction data hash mismatch at block '+i:!c.hash?'Block hash mismatch at block '+i:'Previous hash link broken at block '+i;
+  }
+  return null;
+}
+const badge=(t,v)=>'<span class="pill '+(v?'ok':'bad')+'">'+t+(v?' ok':' wrong')+'</span>';
+function refresh(){
+  document.querySelectorAll('#chain .blk').forEach((el,i)=>{
+    const c=check(i),ok=c.data&&c.hash&&c.link;
+    el.className='blk '+(ok?'good':'bad');
+    el.querySelector('.badges').innerHTML=badge('data',c.data)+badge('hash',c.hash)+badge('link',c.link);
+  });
+  const msg=verdictOf(),v=$('verdict');
+  if(msg===null){v.className='verdict ok';v.textContent='verify_chain() result: valid. Every block matches its fingerprints and links.'}
+  else{v.className='verdict bad';v.textContent='verify_chain() result: invalid. '+msg+'. The check stops at the first problem.'}
+}
+function drawChain(){
+  let html='';
+  blocks.forEach((b,i)=>{
+    html+='<div class="blk"><h4>Block '+i+'</h4>'+
+      '<div><div class="f">amount</div><input type="number" step="0.01" data-i="'+i+'" value="'+esc(b.amount)+'" aria-label="Amount in block '+i+'"></div>'+
+      '<div><div class="f">previous_hash</div><div class="v" title="'+b.prev+'">'+b.prev.slice(0,12)+'…</div></div>'+
+      '<div><div class="f">data_hash (stored)</div><div class="v" title="'+b.data+'">'+b.data.slice(0,12)+'…</div></div>'+
+      '<div><div class="f">block_hash (stored)</div><div class="v" title="'+b.hash+'">'+b.hash.slice(0,12)+'…</div></div>'+
+      '<div class="badges"></div>'+
+      '<button data-fix="'+i+'">Recompute my hashes</button></div>';
+  });
+  $('chain').innerHTML=html;refresh();
+}
+$('chain').addEventListener('input',e=>{
+  const i=e.target.dataset&&e.target.dataset.i;if(i===undefined)return;
+  blocks[+i].amount=e.target.value;refresh();
+});
+$('chain').addEventListener('click',e=>{
+  const i=e.target.dataset&&e.target.dataset.fix;if(i===undefined)return;
+  const b=blocks[+i];b.data=dataHash(b.amount);b.hash=blockHash(+i,b.data,b.prev);drawChain();
+});
+$('rewrite').addEventListener('click',()=>{
+  let prev=ZERO;
+  blocks.forEach((b,i)=>{b.prev=prev;b.data=dataHash(b.amount);b.hash=blockHash(i,b.data,prev);prev=b.hash});drawChain();
+});
+$('reset').addEventListener('click',resetChain);
+resetChain();
+
+/* ---------- 2.1 storage lab ---------- */
+const HDR=160,STATE=4096,DATA=1000;
+function avgBytes(B,N,m){return m*B*DATA/N+B*HDR+STATE}
+function storageLab(){
+  const B=+$('sB').value;let S=+$('sS').value;const N=+$('sN').value;let m=+$('sM').value;
+  S=Math.min(S,B);m=Math.min(m,N);
+  $('oB').textContent=B;$('oS').textContent=S;$('oN').textContent=N;$('oM').textContent=m;
+  const full=B*DATA+B*HDR+STATE,avgData=m*B*DATA/N,avg=avgBytes(B,N,m),red=(full-avg)/full*100;
+  $('stFull').firstChild.textContent=fmt(full);$('stAvg').firstChild.textContent=fmt(avg);$('stRed').firstChild.textContent=red.toFixed(1)+'%';
+  const seg=(w,c,t)=>'<i style="width:'+(w/full*100)+'%;background:'+c+'" title="'+t+'"></i>';
+  $('barFull').innerHTML=seg(B*DATA,'var(--s1)','Block data '+fmt(B*DATA))+seg(B*HDR,'var(--s3)','Headers '+fmt(B*HDR))+seg(STATE,'var(--s2)','State '+fmt(STATE));
+  $('barSeg').innerHTML=seg(avgData,'var(--s1)','Block data '+fmt(avgData))+seg(B*HDR,'var(--s3)','Headers '+fmt(B*HDR))+seg(STATE,'var(--s2)','State '+fmt(STATE));
+  $('stNote').textContent='Each segment holds about '+(B/S).toFixed(1)+' blocks. A node with no segment would need '+fmt(B*HDR+STATE)+' bytes, the floor for any node. Segment count does not change the average, only how evenly it is shared.';
+  // curve
+  const W=560,Ht=230,L=44,R=14,T=14,Bm=34,pw=W-L-R,ph=Ht-T-Bm,mx=Math.min(10,N);
+  const X=k=>L+(mx===1?0:(k-1)/(mx-1))*pw,Y=v=>T+ph-(v/100)*ph;
+  let s='';
+  for(let g=0;g<=100;g+=25)s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(g)+'" y2="'+Y(g)+'" style="stroke:var(--line)"/><text x="'+(L-6)+'" y="'+(Y(g)+4)+'" text-anchor="end">'+g+'%</text>';
+  let pts=[];for(let k=1;k<=mx;k++){const r=(full-avgBytes(B,N,k))/full*100;pts.push([X(k),Y(r),k,r]);s+='<text x="'+X(k)+'" y="'+(Ht-14)+'" text-anchor="middle">'+k+'</text>'}
+  s+='<text x="'+(L+pw/2)+'" y="'+(Ht-1)+'" text-anchor="middle">replicas per segment (m)</text>';
+  s+='<polyline points="'+pts.map(p=>p[0]+','+p[1]).join(' ')+'" style="fill:none;stroke:var(--accent);stroke-width:2.5"/>';
+  pts.forEach(p=>{const cur=p[2]===m;s+='<circle cx="'+p[0]+'" cy="'+p[1]+'" r="'+(cur?6:3.5)+'" style="fill:'+(cur?'var(--s2)':'var(--accent)')+';stroke:var(--surface);stroke-width:1.5"/>';
+    if(cur)s+='<text x="'+p[0]+'" y="'+(p[1]-11)+'" text-anchor="middle" style="fill:var(--ink);font-weight:600">'+p[3].toFixed(1)+'%</text>'});
+  $('curve').innerHTML=s;
+}
+['sB','sS','sN','sM'].forEach(id=>$(id).addEventListener('input',storageLab));storageLab();
+
+/* ---------- Part 3: network map from the real seed-7 run ---------- */
+const REP={S1:[11,5,13],S2:[21,2,3],S3:[27,18,4],S4:[12,19,2],S5:[30,17,7]};
+const FAIL={0:[],30:[21,18,11,3,2,12,5,13,4],60:[26,21,18,20,25,19,11,24,3,2,27,15,12,7,5,13,17,4]};
+function drawMap(mode){
+  const down=new Set(FAIL[mode]),per={};
+  Object.entries(REP).forEach(([s,ns])=>ns.forEach(n=>{(per[n]=per[n]||[]).push(s)}));
+  let g='';
+  for(let n=1;n<=30;n++){
+    const segs=per[n]||[],cls='node'+(segs.length?'':' empty')+(down.has(n)?' down':'');
+    g+='<div class="'+cls+'" title="N'+n+(segs.length?' stores '+segs.join(', '):' stores no segment')+(down.has(n)?' (offline)':'')+'"><b>N'+n+'</b><div class="tags">'+
+      (segs.length?segs.map(s=>'<em style="--c:var(--s'+s[1]+')">'+s+'</em>').join(''):'<span>none</span>')+'</div></div>';
+  }
+  $('grid').innerHTML=g;
+  let sg='',lost=[],crit=[];
+  Object.entries(REP).forEach(([s,ns])=>{
+    const alive=ns.filter(n=>!down.has(n)).length,cls=alive===0?'lost':alive===1?'one':'';
+    if(alive===0)lost.push(s);else if(alive===1)crit.push(s);
+    sg+='<div class="'+cls+'"><b style="color:var(--s'+s[1]+')">'+s+'</b>'+alive+' of 3 copies online'+(alive===0?' (lost)':alive===1?' (critical)':'')+'</div>';
+  });
+  $('segs').innerHTML=sg;
+  const avail=(5-lost.length)/5*100;
+  $('gridNote').textContent=mode==0?'Every segment has three live copies. Availability is 100%.':
+    'Offline nodes: '+FAIL[mode].length+'. Segments lost: '+(lost.length?lost.join(', '):'none')+'. Critical (one copy left): '+(crit.length?crit.join(', '):'none')+'. Availability: '+avail+'%.';
+}
+document.querySelectorAll('button[data-mode]').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('button[data-mode]').forEach(x=>x.setAttribute('aria-pressed',x===b));drawMap(+b.dataset.mode)}));
+drawMap(0);
+
+/* ---------- Part 6: probability lab ---------- */
+function exactP(n,A,m){let p=1;for(let i=0;i<m;i++){if(A-i<=0)return 0;p*=(A-i)/(n-i)}return p}
+function sci(p){if(p===0)return '0';if(p>=0.001)return p.toFixed(p>=0.1?3:4);const e=Math.floor(Math.log10(p));return (p/Math.pow(10,e)).toFixed(2)+' × 10^'+e}
+function probLab(){
+  let n=+$('pN').value,A=+$('pA').value,m=+$('pM').value;
+  $('pA').max=Math.max(1,Math.floor(n/2));A=Math.min(A,n);m=Math.min(m,n);
+  $('oPN').textContent=n;$('oPA').textContent=A;$('oPM').textContent=m;
+  const p=Math.pow(A/n,m),ex=exactP(n,A,m);
+  $('pRes').firstChild.textContent=sci(p);$('pExact').firstChild.textContent=sci(ex);
+  $('pNote').textContent='Formula: ('+A+'/'+n+')^'+m+' = '+(p*100<0.0001?p.toExponential(2):(p*100).toPrecision(3))+'%. About 1 in '+fmt(1/p)+' segments would be lost to this attacker. Exact: about 1 in '+(ex>0?fmt(1/ex):'never (m > A)')+'.';
+  const W=560,Ht=240,L=52,R=14,T=14,Bm=36,pw=W-L-R,ph=Ht-T-Bm,mx=10;
+  const minP=Math.pow(A/n,mx),lo=Math.min(-1,Math.floor(Math.log10(minP))),hi=0;
+  const X=k=>L+(k-1)/(mx-1)*pw,Y=v=>T+(1-(Math.log10(Math.max(v,Math.pow(10,lo)))-lo)/(hi-lo))*ph;
+  let s='';
+  const step=Math.max(1,Math.ceil((hi-lo)/6));
+  for(let e=lo;e<=hi;e+=step)s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(Math.pow(10,e))+'" y2="'+Y(Math.pow(10,e))+'" style="stroke:var(--line)"/><text x="'+(L-6)+'" y="'+(Y(Math.pow(10,e))+4)+'" text-anchor="end">1e'+e+'</text>';
+  let f=[],x=[];for(let k=1;k<=mx;k++){f.push(X(k)+','+Y(Math.pow(A/n,k)));const e=exactP(n,A,k);x.push(X(k)+','+Y(e));s+='<text x="'+X(k)+'" y="'+(Ht-16)+'" text-anchor="middle">'+k+'</text>'}
+  s+='<text x="'+(L+pw/2)+'" y="'+(Ht-2)+'" text-anchor="middle">replicas per segment (m)</text>';
+  s+='<polyline points="'+x.join(' ')+'" style="fill:none;stroke:var(--s2);stroke-width:2;stroke-dasharray:5 4"/>';
+  s+='<polyline points="'+f.join(' ')+'" style="fill:none;stroke:var(--accent);stroke-width:2.5"/>';
+  const cx=X(m),cy=Y(p);s+='<circle cx="'+cx+'" cy="'+cy+'" r="5.5" style="fill:var(--accent);stroke:var(--surface);stroke-width:1.5"/>';
+  s+='<text x="'+(W-R-150)+'" y="'+(T+10)+'" style="fill:var(--accent);font-weight:600">solid: paper formula</text><text x="'+(W-R-150)+'" y="'+(T+26)+'" style="fill:var(--s2);font-weight:600">dashed: exact</text>';
+  $('pchart').innerHTML=s;
+}
+['pN','pA','pM'].forEach(id=>$(id).addEventListener('input',probLab));probLab();
+
+/* ---------- Part 5: file cards ---------- */
+const FILES=[
+{n:'blockchain.py',line:'Builds the fake blockchain and checks it has not been changed.',
+ analogy:'A notebook where every page begins by copying a fingerprint of the previous page. Rip one page out and the next page no longer matches.',
+ fields:[['Transaction.sender','Who pays. One of Account_1 to Account_10.','Account_10'],
+  ['Transaction.receiver','Who gets paid. Always different from the sender.','Account_1'],
+  ['Transaction.amount','Money moved. Random between 1.00 and 100.00, two decimals.','91.06'],
+  ['Transaction.transaction_id','A label built from block number and position.','tx_1_0'],
+  ['Block.index','Position in the chain. The genesis block is 0.','1'],
+  ['Block.timestamp','Fake time in seconds. Genesis is 0.0, others are random between 1e9 and 2e9.','1094130041.94'],
+  ['Block.transactions','The list of transfers in this block.','2 transfers'],
+  ['Block.previous_hash','The block_hash of the block before. Genesis uses 64 zeros.','f015c43d…'],
+  ['Block.data_hash','Fingerprint of the transactions only.','4ee15c4e…'],
+  ['Block.block_hash','Fingerprint of index, timestamp, data_hash and previous_hash glued together. It is the block\'s identity.','52857a0f…']],
+ steps:['<code>generate_chain(num_blocks, tx_per_block, seed)</code> first calls <code>random.seed(seed)</code>, so the same inputs always give the same chain.',
+  'The genesis block is made with timestamp 0.0 and previous_hash of 64 zeros.',
+  'For every next block: create random transfers, compute <code>data_hash = sha256(JSON of transfers, sorted keys)</code>, then <code>block_hash = sha256(f"{index}{timestamp}{data_hash}{previous_hash}")</code> using the previous block\'s block_hash.',
+  '<code>verify_chain()</code> loops over all blocks. For each: recompute data_hash and compare, recompute block_hash and compare, and (except genesis) check previous_hash equals the earlier block\'s block_hash. It returns <code>{valid, error, failed_block}</code> at the first problem.'],
+ real:'verify_chain() on the untouched 100-block chain\n→ {valid: True, error: None, failed_block: None}',
+ watch:['No signatures and no balance checks. Transfers are random, so an account can go negative.','The transactions are fingerprinted as one lump, not with the Merkle tree real blockchains use.']},
+
+{n:'state_machine.py',line:'Tracks account balances and takes snapshots. Written, but not used by the app.',
+ analogy:'A bank statement that you can freeze at certain pages so you can start reading from the freeze instead of from page one.',
+ fields:[['balances','Dictionary: account name to money. Starts as Account_1 to Account_10 with 1000.0 each (10,000 in total).','Account_1: 1000.0'],
+  ['checkpoints','Dictionary: block index to a copy of the balances right after that block.','{19: {…}}']],
+ steps:['<code>derive_state(blocks, segment_boundaries)</code> clears the checkpoints and walks the blocks in order.','Each transfer subtracts the amount from the sender and adds it to the receiver (<code>_process_transaction</code>).','When a block index appears in <code>segment_boundaries</code>, it saves a copy of all balances.','Helpers: <code>get_balances</code>, <code>get_checkpoint</code>, <code>validate_balances</code> (all non-negative?), <code>get_total_balance</code>.'],
+ real:'After 100 blocks with checkpoints at 19, 39, 59, 79, 99\nCheckpoint after block 19:\n  Account_1  1412.64     Account_2   623.02     Account_3  1065.95\n  Account_4   697.80     Account_5  1101.22     Account_6  1134.79\nTotal money stays 10,000.00 (transfers only move money).',
+ watch:['<code>app.py</code> never calls it, so the dashboard shows no balances.','The idea behind checkpoints: a node holding only a later segment could start from the saved balances. <code>Segment.checkpoint</code> exists for this but is always empty.']},
+
+{n:'segmentation.py',line:'Cuts the list of blocks into consecutive segments.',
+ analogy:'Cutting a long film reel into equal parts without losing or repeating a frame.',
+ fields:[['segment_id','Name: S1, S2, …','S2'],['start_height','Index of the first block in the segment.','20'],['end_height','Index of the last block (inclusive).','39'],['block_count','How many blocks it holds.','20'],['blocks','The block objects themselves.','20 blocks'],['checkpoint','Reserved for a balance snapshot. Always None for now.','None']],
+ steps:['Check the inputs: segments must be above 0, the chain not empty, and segments not more than blocks (else <code>ValueError</code>).','Compute <code>base = blocks // segments</code> and <code>remainder = blocks % segments</code>.','The first <code>remainder</code> segments get one extra block. Example: 103 blocks into 5 gives sizes 21, 21, 21, 20, 20.','<code>validate_partitioning()</code> checks no gaps, no overlap, every block covered once.','Lookups: <code>get_segment_by_id("S3")</code> and <code>get_segment_by_height(57)</code> (answers S3).'],
+ real:'100 blocks, 5 segments\nS1  0–19   S2  20–39   S3  40–59   S4  60–79   S5  80–99',
+ watch:['Segments are consecutive on purpose: a node can answer a request for a block range from one place.']},
+
+{n:'assignment.py',line:'Creates the nodes and decides which node stores which segment.',
+ analogy:'Handing out copies of five book volumes to 30 libraries by drawing names from a hat, three libraries per volume.',
+ fields:[['Node.node_id','Name: N1 to N30.','N5'],['Node.segment_ids','Which segments this node stores.','["S1"]'],['Node.is_online','Whether the node is up. Used by the failure tests.','True'],
+  ['Node.stored_block_bytes','Block data stored. Filled in later by storage_metrics.','20000'],['Node.header_bytes','Header bytes stored (all blocks).','16000'],['Node.state_bytes','Latest state bytes.','4096'],['Node.total_bytes','Sum of the three above.','40096'],
+  ['segment_replicas','Dictionary: segment to the list of node ids that hold it.','{"S1": ["N11","N5","N13"]}']],
+ steps:['Validate: nodes above 0, replicas above 0, replicas not more than nodes.','<code>random.seed(seed)</code>, then create N1 to N30 with empty segment lists.','For each segment, <code>random.sample(range(nodes), replicas)</code> picks distinct nodes. Distinct means a node never holds the same segment twice.','Each chosen node gets the segment id, and <code>segment_replicas</code> records the node ids.','<code>validate_assignment()</code> checks every segment has exactly the expected number of distinct holders.','Controls used later: <code>set_node_status</code>, <code>reset_all_nodes</code>, <code>get_segment_replica_count</code> (online holders only), <code>get_assignment_matrix</code> (rows for the Network page).'],
+ real:'segment_replicas (seed 7)\n  S1 → N11, N5, N13      S2 → N21, N2, N3\n  S3 → N27, N18, N4      S4 → N12, N19, N2\n  S5 → N30, N17, N7',
+ watch:['Placement is random and unbalanced. 16 nodes store nothing and one node stores two segments.','More replicas than nodes raises an error, and the sidebar does not stop you from choosing it.']},
+
+{n:'storage_metrics.py',line:'Works out how many bytes a full node and a segmented node need.',
+ analogy:'A price calculator: what does each shelf cost if every library owns every volume, compared to owning only some?',
+ fields:[['block_data_size','Bytes per block\'s data in the model.','1000'],['header_size','Bytes per block header.','160'],['state_size','Bytes for the latest state.','4096'],
+  ['full_node.total','blocks × data + blocks × header + state.','120,096'],['average / minimum / maximum','Statistics over segmented nodes.','30,096 / 20,096 / 60,096'],['reduction_percentage','(full − segmented average) / full × 100.','74.9']],
+ steps:['<code>estimate_storage()</code> gives the full-node figures.','<code>calculate_segmented_storage()</code> goes through each node: add <code>block_count × block_data_size</code> for each segment it holds, then add all headers and the state. It also writes these numbers into each Node object.','<code>compare_storage()</code> and <code>calculate_reduction()</code> turn the two into a percentage.','<code>calculate_network_storage()</code> sums every node (total storage used by the whole network). <code>format_bytes()</code> prints KB or MB.'],
+ real:'full node   120,096 B\nsegmented   average 30,096   min 20,096   max 60,096\nreduction   74.9%',
+ watch:['The sizes are assumptions you can change in the sidebar, not measured data.','Headers and state are counted in full on every node, which is why even an empty node needs 20,096 bytes.']},
+
+{n:'availability.py',line:'Switches nodes off and checks which segments still have a copy.',
+ analogy:'A fire drill: close some libraries and see which volumes you can no longer find anywhere.',
+ fields:[['failed_nodes','Set of node ids currently marked down.','{"N21","N18",…}'],['total_nodes / online_nodes / offline_nodes','Counts of nodes.','30 / 21 / 9'],['failed_node_ids','Which nodes were switched off.','N21, N18, …'],
+  ['surviving_replicas','Dictionary: segment to number of online holders.','{"S1": 0, "S3": 1}'],['lost_segments','Segments with zero survivors.','["S1","S2"]'],['available_segments','Segments minus lost ones.','3'],['availability_percentage','available / total × 100.','60.0']],
+ steps:['<code>simulate_node_failures()</code> first marks every node online and clears the failure set.','If a list of node ids is given, those go offline. Otherwise, if a percentage is given, it seeds the generator, computes <code>int(nodes × pct / 100)</code> and picks that many nodes with <code>random.sample</code>.','For each segment it counts holders still online. Zero means lost.','Extras: <code>fail_random_nodes</code>, <code>restore_node</code>, <code>restore_all_nodes</code>, <code>get_critical_segments</code> (exactly one survivor).'],
+ real:'30% failures (9 nodes): survivors S1 0, S2 0, S3 1, S4 1, S5 3 → lost S1, S2 → 60%\n60% failures (18 nodes): survivors S1–S4 0, S5 1 → 20%',
+ watch:['Each run resets earlier failures, including nodes you marked offline on the Network page.','Fewer segments than nodes means results move in big steps. With five segments, each loss is 20 points.']},
+
+{n:'probability.py',line:'Calculates the paper\'s theoretical chance of losing a segment.',
+ analogy:'Betting odds: if each of three copies independently has a 1 in 10 chance of sitting on a bad node, all three being bad is 1 in 1000.',
+ fields:[['total_nodes (n)','All nodes in the network.','30'],['adversarial_nodes (A)','Most nodes an attacker is assumed to control.','3'],['replicas_per_segment (m)','Copies of each segment.','3'],
+  ['adversarial_fraction','A divided by n.','0.1'],['probability','(A/n)^m as a fraction.','0.001'],['percentage','Probability × 100.','0.1']],
+ steps:['<code>segment_loss_probability()</code> rejects bad inputs (n at or below 0, A below 0 or above n, m at or below 0 or above n).','It computes <code>(A/n) ** m</code> and returns the fraction, the percentage and a text like <code>P = (3/30)^3</code>.','<code>calculate_probability_curve</code> repeats this for m = 1, 2, 3, … and <code>calculate_multiple_curves</code> does it for several attacker percentages.','<code>get_assumptions_explanation()</code> returns the written assumptions shown on the Probability page.'],
+ real:'n = 30, A = 3, m = 3 → P = (3/30)^3 = 0.001 = 0.1%\nm = 1: 10%   m = 2: 1%   m = 4: 0.01%   m = 6: 0.0001%',
+ watch:['It does not use the simulated network at all. It is separate math, shown beside the simulation.','The file\'s header comment says (AD/n)^m, but the code correctly computes (A/n)^m.']},
+
+{n:'integrity.py',line:'Tampers with a copy of the chain to show that changes are detected.',
+ analogy:'A tamper-evident seal test: break a seal on a spare box and see whether the inspector notices, while the real box stays sealed.',
+ fields:[['blockchain','The chain being tested.','Blockchain object'],['original_chain','Saved deep copy taken at the start for restoring.','list of Blocks'],
+  ['tamper result: verification','Output of verify_chain() on the damaged copy.','{valid: False, …}'],['block_index','Which block was altered.','10'],['original_amount / tampered_amount','Value before and after.','61.79 / 9999.0'],['tamper_type','What was changed.','transaction_amount']],
+ steps:['<code>save_original()</code> stores a deep copy, so the real chain is never altered.','<code>tamper_copy(block, tx, amount)</code>: copy the chain, change one transfer amount, then recompute that block\'s own data_hash and block_hash (the attacker covers their tracks), then verify.','<code>tamper_previous_hash(block)</code>: put a random previous_hash into one block and recompute its block_hash, then verify.','<code>reset_experiment()</code> restores the saved chain.'],
+ real:'Change the amount in block 10 (61.79 → 9999.0)\n→ invalid: "Previous hash link broken at block 11"\nChange previous_hash of block 10\n→ invalid: "Previous hash link broken at block 10"\nChange the amount in the LAST block (99)\n→ valid. Nothing after it remembers its old hash.',
+ watch:['The last block cannot be caught by hashing alone. Real systems rely on other nodes\' agreement, which is outside this project.','The Integrity page always shows "Original chain: Valid" without re-checking it.']},
+
+{n:'export.py',line:'Saves results to JSON and CSV files in the current folder.',
+ analogy:'The print button. It does no thinking; it writes what it is handed into files named with the time.',
+ fields:[['export_results_json','Scenario JSON: configuration plus results.','segmentchain_experiment_<time>.json'],['export_node_assignment_csv','One row per node and segment held.','segmentchain_node_assignment_<time>.csv'],
+  ['export_storage_metrics_csv','Per-node bytes.','segmentchain_storage_metrics_<time>.csv'],['export_segment_summary_csv','Segment table.','…segment_summary…'],['export_availability_results_csv','Summary plus per-segment survivors and failed nodes.','…availability…'],
+  ['create_experiment_report','Full JSON report.','segmentchain_report_<time>.json'],['simulation_only','Flag written in every JSON so nobody mistakes it for real data.','True']],
+ steps:['Each method builds a filename from the current time if none is given.','JSON methods wrap the data with an export time, <code>simulation_only: True</code> and a short disclaimer.','<code>export_table_csv()</code> is the one generic writer: headers come from the first row\'s keys. Empty data writes a "No data" note.'],
+ real:'Export page buttons: Scenario (JSON), Assignments (CSV), Storage (CSV), Complete report (JSON)',
+ watch:['Files go to the folder where you started Streamlit.','Segment summary and probability exporters exist but have no button yet.']},
+
+{n:'app.py',line:'The Streamlit dashboard: sidebar, eight pages and all the styling.',
+ analogy:'The front desk. It takes your request, asks the specialist files for answers, and draws the results.',
+ fields:[['Blocks','10 to 1000, default 100.','100'],['Transactions per block','1 to 100, default 5.','5'],['Random seed','0 to 10000, default 7.','7'],['Segments','2 to 50, default 5.','5'],['Nodes','3 to 100, default 30.','30'],['Replicas per segment','1 to 10, default 3.','3'],
+  ['Header / State / Block bytes','Model sizes: 32 to 512, 1024 to 16384, 100 to 10000.','160 / 4096 / 1000'],['st.session_state','Streamlit\'s memory that keeps the engines between clicks.','blockchain, segmentation_engine, …']],
+ steps:['Streamlit re-runs the whole script on every click, so objects are kept in <code>st.session_state</code> or they would vanish. <code>initialize_session_state()</code> creates them once.','<code>inject_css()</code> paints the light or dark theme. Helpers such as <code>stat_card</code>, <code>alert</code> and <code>style_fig</code> keep the look consistent.','<code>sidebar()</code> shows the inputs and the Generate button, which calls <code>run_simulation()</code> (see Part 4).','<code>main()</code> picks a page function from a dictionary: Dashboard, Segments, Storage, Network, Availability, Probability, Integrity, Export.','<code>storage_summary()</code> recomputes storage from the sizes chosen at generation time. Probability works without any simulation.'],
+ real:'Pages and what they read\nDashboard → blockchain, storage     Segments → segmentation, assignment\nStorage → storage_metrics          Network → assignment controls\nAvailability → availability        Probability → probability\nIntegrity → integrity              Export → export',
+ watch:['Pillow is imported for the app icon but missing from requirements.txt.','Choosing more replicas than nodes causes an uncaught error.']},
+
+{n:'requirements.txt and README.md',line:'What to install, how to run it, and the project summary.',
+ analogy:'The shopping list and the instruction card on the box.',
+ fields:[['streamlit >= 1.28.0','Builds the web dashboard.',''],['plotly >= 5.17.0','Draws the charts.',''],['pandas >= 2.1.0','Tables.','']],
+ steps:['Create a virtual environment, run <code>pip install -r requirements.txt</code>.','Start with <code>streamlit run app.py</code>. The browser opens automatically.'],
+ real:'python -m venv venv\nsource venv/bin/activate   (Windows: venv\\Scripts\\activate)\npip install -r requirements.txt\nstreamlit run app.py',
+ watch:['The README lists tests and a prd.md that were not part of the files supplied for this review.']}
+];
+(function(){
+  let h='';
+  FILES.forEach((f,i)=>{
+    h+='<details class="file"'+(i===0?' open':'')+'><summary><span class="fn">'+esc(f.n)+'</span><span class="fl">'+esc(f.line)+'</span></summary><div class="fbody">'+
+      '<div class="analogy"><strong>Everyday comparison.</strong> '+f.analogy+'</div>'+
+      '<h4>Fields and what they mean</h4><div class="tw"><table><tr><th>Name</th><th>Meaning</th><th>Example</th></tr>'+
+      f.fields.map(r=>'<tr><td>'+esc(r[0])+'</td><td>'+r[1]+'</td><td>'+(r[2]?'<code>'+esc(r[2])+'</code>':'')+'</td></tr>').join('')+'</table></div>'+
+      '<h4>How it works</h4><ol>'+f.steps.map(s=>'<li>'+s+'</li>').join('')+'</ol>'+
+      '<h4>Real output from your code</h4><pre>'+esc(f.real)+'</pre>'+
+      '<h4>Good to know</h4><ul>'+f.watch.map(s=>'<li>'+s+'</li>').join('')+'</ul></div></details>';
+  });
+  $('fileList').innerHTML=h;
+})();
+</script>
+
+</body></html>
